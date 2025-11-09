@@ -7,8 +7,8 @@ on:
     types: [submitted]
 
 env:
-  PROJECT_NUMBER: 4  # ⬅️ ЗАМЕНИ НА СВОЙ НОМЕР ПРОЕКТА!
-  ORGANIZATION: virusneo1997-del
+  PROJECT_NUMBER: 4  # ⬅️ У тебя уже правильный номер!
+  USER_LOGIN: virusneo1997-del  # ⬅️ Меняем ORGANIZATION на USER_LOGIN
 
 jobs:
   automate-project:
@@ -28,17 +28,22 @@ jobs:
             
             const author = pull_request.user.login;
             const prAction = context.payload.action;
+            const prState = pull_request.state;
             const prMerged = pull_request.merged;
-            const reviewState = context.payload.review?.state;
+            const prTitle = pull_request.title;
             
             console.log(`👤 Автор PR: ${author}`);
             console.log(`🔧 Действие: ${prAction}`);
-            console.log(`🔄 Мерж: ${prMerged}`);
+            console.log(`📝 Заголовок: ${prTitle}`);
+            console.log(`🔄 Статус PR: ${prState}`);
+            console.log(`✅ Мерж: ${prMerged}`);
             
-            // Определяем новый статус на основе события
+            // ОПРЕДЕЛЯЕМ НОВЫЙ СТАТУС
             let newStatus = null;
             
             if (context.eventName === 'pull_request') {
+              console.log(`🔄 Обрабатываем событие pull_request: ${prAction}`);
+              
               switch (prAction) {
                 case 'opened':
                 case 'reopened':
@@ -51,26 +56,30 @@ jobs:
                   newStatus = prMerged ? 'Done' : 'To do';
                   break;
               }
-            } else if (context.eventName === 'pull_request_review') {
+            }
+            
+            if (context.eventName === 'pull_request_review') {
+              const reviewState = context.payload.review.state;
               if (reviewState === 'approved') {
                 newStatus = 'Done';
               }
             }
             
             if (!newStatus) {
-              console.log('ℹ️ Статус не изменился');
+              console.log('ℹ️ Статус не изменился для этого события');
               return;
             }
             
-            console.log(`🎯 Новый статус: ${newStatus}`);
+            console.log(`🎯 Устанавливаем новый статус: ${newStatus}`);
             
             try {
-              // 1. Получаем ID проекта
+              // ⚠️ ИСПРАВЛЕНИЕ: Используем user вместо organization
               const projectQuery = `
-                query getProject($org: String!, $number: Int!) {
-                  organization(login: $org) {
+                query getProject($user: String!, $number: Int!) {
+                  user(login: $user) {
                     projectV2(number: $number) {
                       id
+                      title
                       fields(first: 20) {
                         nodes {
                           ... on ProjectV2Field {
@@ -93,34 +102,34 @@ jobs:
               `;
               
               const projectResult = await github.graphql(projectQuery, {
-                org: '${{ env.ORGANIZATION }}',
+                user: '${{ env.USER_LOGIN }}',  // ⬅️ Меняем org на user
                 number: ${{ env.PROJECT_NUMBER }}
               });
               
-              const project = projectResult.organization.projectV2;
+              const project = projectResult.user.projectV2;  // ⬅️ Меняем organization на user
               if (!project) {
-                console.log('❌ Проект не найден');
+                console.log('❌ Проект не найден. Проверь PROJECT_NUMBER');
                 return;
               }
               
               const projectId = project.id;
-              console.log(`📊 Найден проект: ${projectId}`);
+              console.log(`📊 Найден проект: ${project.title} (ID: ${projectId})`);
               
-              // 2. Находим поле Status
+              // 2. НАХОДИМ ПОЛЕ STATUS
               const statusField = project.fields.nodes.find(field => field.name === 'Status');
               if (!statusField) {
                 console.log('❌ Поле Status не найдено в проекте');
                 return;
               }
               
-              // 3. Находим опцию статуса
+              // 3. НАХОДИМ ОПЦИЮ СТАТУСА
               const statusOption = statusField.options.find(option => option.name === newStatus);
               if (!statusOption) {
                 console.log(`❌ Опция статуса '${newStatus}' не найдена`);
                 return;
               }
               
-              // 4. Находим карточку студента по полю Student GitHub
+              // 4. ИЩЕМ КАРТОЧКУ СТУДЕНТА
               const itemsQuery = `
                 query getProjectItems($projectId: ID!) {
                   node(id: $projectId) {
@@ -150,6 +159,8 @@ jobs:
               const itemsResult = await github.graphql(itemsQuery, { projectId });
               const items = itemsResult.node.items.nodes;
               
+              console.log(`🔍 Ищем карточку для студента: ${author}`);
+              
               // Ищем карточку по Student GitHub
               const studentItem = items.find(item => {
                 const githubField = item.fieldValues.nodes.find(f => 
@@ -160,21 +171,12 @@ jobs:
               
               if (!studentItem) {
                 console.log(`❌ Карточка для студента ${author} не найдена`);
-                console.log('📋 Доступные карточки:');
-                items.forEach(item => {
-                  const githubField = item.fieldValues.nodes.find(f => 
-                    f.field && f.field.name === 'Student GitHub'
-                  );
-                  if (githubField) {
-                    console.log(`- ${githubField.text}`);
-                  }
-                });
                 return;
               }
               
-              console.log(`📎 Найдена карточка: ${studentItem.id}`);
+              console.log(`📎 Найдена карточка студента: ${studentItem.id}`);
               
-              // 5. Обновляем статус карточки
+              // 5. ОБНОВЛЯЕМ СТАТУС КАРТОЧКИ
               const updateMutation = `
                 mutation updateProjectItem($input: UpdateProjectV2ItemFieldValueInput!) {
                   updateProjectV2ItemFieldValue(input: $input) {
@@ -194,10 +196,12 @@ jobs:
                 }
               };
               
+              console.log('🔄 Отправляем запрос на обновление...');
               await github.graphql(updateMutation, { input: updateInput });
-              console.log(`✅ Карточка студента ${author} перемещена в статус: ${newStatus}`);
+              
+              console.log(`✅ УСПЕХ: Карточка студента ${author} перемещена в: ${newStatus}`);
               
             } catch (error) {
-              console.error('💥 Ошибка при обновлении карточки:', error);
-              console.log('🔧 Совет: Проверь PROJECT_NUMBER и права доступа');
+              console.error('💥 ОШИБКА при обновлении карточки:', error);
+              console.log('🔧 Проверь: PROJECT_NUMBER, USER_LOGIN и права доступа');
             }
