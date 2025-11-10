@@ -18,55 +18,46 @@ jobs:
         with:
           github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
-            const { context } = require('@actions/github');
+            const projectNumber = 7;
+            const columnName = "In review";
 
-            const projectNumber = 7; // твой проект
-            const columnName = "In review"; // колонка в Project v2
-
-            // 1️⃣ Получаем данные о PR (безопасно)
+            // Получаем информацию о PR
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
               pull_number: context.issue.number
             });
+
             const prId = pr.node_id;
 
-            // 2️⃣ Получаем ID проекта
-            const queryProject = `
+            // Получаем ID проекта
+            const projectData = await github.graphql(`
               query($login: String!, $number: Int!) {
                 user(login: $login) {
                   projectV2(number: $number) {
                     id
                   }
                 }
-              }`;
-
-            const projectData = await github.graphql(queryProject, {
-              login: "virusneo1997-del",
-              number: projectNumber
-            });
+              }`,
+              { login: "virusneo1997-del", number: projectNumber }
+            );
 
             const projectId = projectData.user.projectV2.id;
 
-            // 3️⃣ Добавляем PR в проект
-            const addItem = `
-              mutation($projectId: ID!, $prId: ID!) {
-                addProjectV2ItemById(input: {projectId: $projectId, contentId: $prId}) {
-                  item {
-                    id
-                  }
+            // Добавляем PR в проект
+            const addItemResult = await github.graphql(`
+              mutation($projectId: ID!, $contentId: ID!) {
+                addProjectV2ItemById(input: {projectId: $projectId, contentId: $contentId}) {
+                  item { id }
                 }
-              }`;
+              }`,
+              { projectId, contentId: prId }
+            );
 
-            const addResult = await github.graphql(addItem, {
-              projectId: projectId,
-              prId: prId
-            });
+            const itemId = addItemResult.addProjectV2ItemById.item.id;
 
-            const itemId = addResult.addProjectV2ItemById.item.id;
-
-            // 4️⃣ Получаем ID поля "Status"
-            const fieldQuery = `
+            // Получаем поле "Status"
+            const fieldData = await github.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
@@ -74,17 +65,15 @@ jobs:
                       nodes {
                         id
                         name
-                        options {
-                          id
-                          name
-                        }
+                        options { id name }
                       }
                     }
                   }
                 }
-              }`;
+              }`,
+              { projectId }
+            );
 
-            const fieldData = await github.graphql(fieldQuery, { projectId });
             const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
             const column = statusField?.options?.find(o => o.name === columnName);
 
@@ -93,27 +82,23 @@ jobs:
               return;
             }
 
-            // 5️⃣ Перемещаем PR в нужную колонку
-            const setStatus = `
+            // Меняем статус карточки
+            await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
                   projectId: $projectId,
                   itemId: $itemId,
                   fieldId: $fieldId,
                   value: { singleSelectOptionId: $optionId }
-                }) {
-                  projectV2Item {
-                    id
-                  }
-                }
-              }`;
-
-            await github.graphql(setStatus, {
-              projectId,
-              itemId,
-              fieldId: statusField.id,
-              optionId: column.id
-            });
+                }) { projectV2Item { id } }
+              }`,
+              {
+                projectId,
+                itemId,
+                fieldId: statusField.id,
+                optionId: column.id
+              }
+            );
 
             console.log("✅ PR добавлен в колонку 'In review'");
 
@@ -123,12 +108,9 @@ jobs:
         with:
           github-token: ${{ secrets.PROJECT_ACCESS_TOKEN }}
           script: |
-            const { context } = require('@actions/github');
-
             const projectNumber = 7;
             const columnName = "To do";
 
-            // Получаем данные о PR
             const { data: pr } = await github.rest.pulls.get({
               owner: context.repo.owner,
               repo: context.repo.repo,
@@ -136,25 +118,20 @@ jobs:
             });
             const prId = pr.node_id;
 
-            // Получаем ID проекта
-            const queryProject = `
+            const projectData = await github.graphql(`
               query($login: String!, $number: Int!) {
                 user(login: $login) {
                   projectV2(number: $number) {
                     id
                   }
                 }
-              }`;
-
-            const projectData = await github.graphql(queryProject, {
-              login: "virusneo1997-del",
-              number: projectNumber
-            });
+              }`,
+              { login: "virusneo1997-del", number: projectNumber }
+            );
 
             const projectId = projectData.user.projectV2.id;
 
-            // Получаем поле "Status"
-            const fieldQuery = `
+            const fieldData = await github.graphql(`
               query($projectId: ID!) {
                 node(id: $projectId) {
                   ... on ProjectV2 {
@@ -162,17 +139,15 @@ jobs:
                       nodes {
                         id
                         name
-                        options {
-                          id
-                          name
-                        }
+                        options { id name }
                       }
                     }
                   }
                 }
-              }`;
+              }`,
+              { projectId }
+            );
 
-            const fieldData = await github.graphql(fieldQuery, { projectId });
             const statusField = fieldData.node.fields.nodes.find(f => f.name === "Status");
             const column = statusField?.options?.find(o => o.name === columnName);
 
@@ -181,26 +156,21 @@ jobs:
               return;
             }
 
-            // Перемещаем карточку обратно
-            const setStatus = `
+            await github.graphql(`
               mutation($projectId: ID!, $itemId: ID!, $fieldId: ID!, $optionId: String!) {
                 updateProjectV2ItemFieldValue(input: {
                   projectId: $projectId,
                   itemId: $itemId,
                   fieldId: $fieldId,
                   value: { singleSelectOptionId: $optionId }
-                }) {
-                  projectV2Item {
-                    id
-                  }
-                }
-              }`;
-
-            await github.graphql(setStatus, {
-              projectId,
-              itemId: prId,
-              fieldId: statusField.id,
-              optionId: column.id
-            });
+                }) { projectV2Item { id } }
+              }`,
+              {
+                projectId,
+                itemId: prId,
+                fieldId: statusField.id,
+                optionId: column.id
+              }
+            );
 
             console.log("🔁 PR перемещён в 'To do'");
